@@ -83,7 +83,10 @@ IF OBJECT_ID('tempdb..#populated_tables') IS NULL
     CREATE TABLE #populated_tables
         (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
 
-DECLARE @steps TABLE
+IF OBJECT_ID('tempdb..#steps') IS NOT NULL
+    DROP TABLE #steps;
+
+CREATE TABLE #steps
 (
     step_id     int IDENTITY    NOT NULL PRIMARY KEY,
     kind        sysname         NOT NULL,
@@ -213,7 +216,7 @@ FROM
 -- -----------------------------------------------------------------------------
 -- Database Options
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'opts', DB_NAME(),
     sql =
@@ -276,7 +279,7 @@ WHERE
 --
 -- UNSUPPORTED: Types A, C, E, G, K, U, X
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     kind  = IIF(p.type = 'R', 'role', 'user'),
     name  = p.name,
@@ -304,7 +307,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Role Membership
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     kind  = 'member',
     name  = u.name + ' in ' + r.name,
@@ -330,7 +333,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Schemas
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'schema', name,
     'CREATE SCHEMA ' + QUOTENAME(name) + ' AUTHORIZATION dbo;' + @NL
@@ -349,7 +352,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Scalar Types
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'type', s.name + '.' + u.name,
     --
@@ -373,7 +376,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Table Types
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'type', s.name + '.' + t.name,
     --
@@ -489,7 +492,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Tables
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'table', s.name + '.' + t.name,
     --
@@ -710,7 +713,7 @@ WITH prioritizing AS
     FROM prioritizing
     GROUP BY object_id, column_id, type, schema_name, object_name, column_name, expression
 )
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     kind  = o.type,
     name  = o.schema_name + '.' + o.object_name + ISNULL('.' + o.column_name, ''),
@@ -736,11 +739,10 @@ ORDER BY
     o.priority DESC, o.schema_name, o.object_name, c.name
 ;
 
-
 -- -----------------------------------------------------------------------------
 -- Primary/Unique Key Constraints and Indexes
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     kind = CASE
         WHEN i.is_primary_key       = 1 THEN 'pk'
@@ -835,7 +837,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Foreign Key Constraints
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'foreign key', s.name + '.' + t.name + '.' + k.name,
     sql =
@@ -900,7 +902,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Default Constraints
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'default', s.name + '.' + t.name + '.' + d.name,
     sql=
@@ -932,7 +934,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Check Constraints
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'check constraint', /*s.name + '.' + t.name + '.' +*/ c.name,
     sql =
@@ -959,7 +961,7 @@ ORDER BY
 -- -----------------------------------------------------------------------------
 -- Triggers (DML Only)
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'trigger', s.name + '.' + r.name, OBJECT_DEFINITION(r.object_id)
 FROM
@@ -1084,7 +1086,7 @@ WHERE
 -- -----------------------------------------------------------------------------
 -- Permissions
 
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'permissions', '(all)',
     sql =
@@ -1172,7 +1174,7 @@ SELECT sql =
         + 'GO'                                                                              + @NL
         + ''                                                                                + @NL
     FROM
-        @steps
+        #steps
     ORDER BY
         step_id
     FOR XML
