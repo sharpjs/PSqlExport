@@ -697,8 +697,7 @@ SELECT @Sql =
     FOR XML
         PATH(''), TYPE
 )
-.value('.', 'nvarchar(max)')
-;
+.value('.', 'nvarchar(max)');
 
 EXEC(@Sql);
 
