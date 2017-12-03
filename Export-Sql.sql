@@ -601,7 +601,12 @@ SELECT @Sql =
 +
 (
     SELECT '
-        SELECT sql
+        INSERT #steps (kind, name, sql)
+        SELECT
+            ''data'',
+            ''' + REPLACE(QUOTENAME(s.name), '''', '''''') + '.'
+                + REPLACE(QUOTENAME(o.name), '''', '''''') + ''',
+            sql
           = ''INSERT ' + REPLACE(QUOTENAME(s.name), '''', '''''') + '.'
                        + REPLACE(QUOTENAME(o.name), '''', '''''') + ''' + @NL
           + ''    ( '
