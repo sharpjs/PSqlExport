@@ -1053,10 +1053,9 @@ WITH properties AS
     FROM
         properties
 )
-INSERT @steps (kind, name, sql)
-SELECT
-    'properties', '(all)',
-    sql =
+, properties_sql AS
+(
+    SELECT sql =
     (
         SELECT
             'EXEC sys.sp_addextendedproperty ' + name + ', ' + value_text +
@@ -1072,6 +1071,14 @@ SELECT
             PATH(''), TYPE
     )
     .value('.', 'nvarchar(max)')
+)
+INSERT @steps (kind, name, sql)
+SELECT
+    'properties', '(all)', sql
+FROM
+    properties_sql
+WHERE
+    sql IS NOT NULL
 ;
 
 -- -----------------------------------------------------------------------------
