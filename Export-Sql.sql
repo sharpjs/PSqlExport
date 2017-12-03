@@ -1074,7 +1074,7 @@ WITH properties AS
     )
     .value('.', 'nvarchar(max)')
 )
-INSERT @steps (kind, name, sql)
+INSERT #steps (kind, name, sql)
 SELECT
     'properties', '(all)', sql
 FROM
