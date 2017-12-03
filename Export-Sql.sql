@@ -26,14 +26,14 @@
     * Scalar Types
     * Table Types
     * Tables (no computed columns or constraints)
+    * Table Data
     * Computed Columns, Views, Funcs, Procs
     * Primary Key, Unique Constraints, Indexes
-    * Table Data
     * Constraints: foreign key
     * Constraints: default
     * Constraints: check
     * Extended Properties
-    ? Triggers
+    * Triggers
 */
 
 -- -----------------------------------------------------------------------------
