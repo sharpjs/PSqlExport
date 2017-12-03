@@ -558,6 +558,146 @@ ORDER BY
 ;
 
 -- -----------------------------------------------------------------------------
+-- Data
+
+DECLARE @Sql nvarchar(max);
+
+WITH formats AS
+(
+    SELECT
+        t.user_type_id,
+        format = CASE ISNULL(b.name, t.name)
+            WHEN 'char'             THEN 2 -- quoted/escaped
+            WHEN 'nchar'            THEN 2 -- quoted/escaped
+            WHEN 'varchar'          THEN 2 -- quoted/escaped
+            WHEN 'nvarchar'         THEN 2 -- quoted/escaped
+            WHEN 'uniqueidentifier' THEN 1 -- quoted
+            WHEN 'datetime'         THEN 1 -- quoted
+            WHEN 'smalldatetime'    THEN 1 -- quoted
+            WHEN 'datetime2'        THEN 1 -- quoted
+            WHEN 'datetimeoffset'   THEN 1 -- quoted
+            WHEN 'date'             THEN 1 -- quoted
+            WHEN 'time'             THEN 1 -- quoted
+            WHEN 'geography'        THEN 1 -- quoted?
+            WHEN 'geometry'         THEN 1 -- quoted?
+            ELSE                         0 -- bare
+        END
+    FROM
+        sys.types t -- nominal type, possibly user-defined
+    LEFT JOIN
+        sys.types b -- base type if t is user-defined
+        ON  b.user_type_id = t.system_type_id
+        AND 1              = t.is_user_defined
+    WHERE 0=0
+        AND t.is_table_type = 0
+        AND t.name         != 'timestamp'
+)
+SELECT @Sql =
+'
+    DECLARE
+        @NL nchar(2) = CHAR(13) + CHAR(10),
+        @QT nchar(1) = CHAR(39);
+'
++
+(
+    SELECT '
+        SELECT sql
+          = ''INSERT ' + REPLACE(QUOTENAME(s.name), '''', '''''') + '.'
+                       + REPLACE(QUOTENAME(o.name), '''', '''''') + ''' + @NL
+          + ''    ( '
+
+          + STUFF((
+                SELECT
+                    ', ' + REPLACE(QUOTENAME(c.name), '''', '''''')
+                FROM
+                    sys.columns c
+                INNER JOIN
+                    formats f
+                    ON f.user_type_id = c.system_type_id
+                WHERE 0=0
+                    AND c.object_id   = o.object_id
+                    AND c.is_computed = 0
+                    AND c.is_identity = 0
+                ORDER BY
+                    c.column_id
+                FOR XML
+                    PATH(''), TYPE
+            )
+            .value('.', 'nvarchar(max)')
+            , 1, 2, '')
+
+          + ' )'' + @NL
+          + ''VALUES''
+          + STUFF((
+                SELECT _
+                  = '','' + @NL + ''    ( '''
+                  + STUFF((
+                        SELECT _
+                          = ' + '', ''' + @NL
+                          + '              + '
+                          + 'ISNULL('
+                          + IIF(f.format > 0, '@QT + ', '')
+                          + IIF(f.format > 1, 'REPLACE(', '')
+                          + 'CONVERT(nvarchar(max), '
+                          + REPLACE(QUOTENAME(c.name), '''', '''''')
+                          + ')'
+                          + IIF(f.format > 1, ', @QT, @QT+@QT)', '')
+                          + IIF(f.format > 0, ' + @QT', '')
+                          + ', ''NULL'')'
+                        FROM
+                            sys.columns c
+                        INNER JOIN
+                            formats f
+                            ON f.user_type_id = c.system_type_id
+                        WHERE 0=0
+                            AND c.object_id   = o.object_id
+                            AND c.is_computed = 0
+                            AND c.is_identity = 0
+                        ORDER BY
+                            c.column_id
+                        FOR XML
+                            PATH(''), TYPE
+                    )
+                    .value('.', 'nvarchar(max)')
+                    , 1, 7, '')
+                  + '
+                  + '' )''
+                FROM
+                    ' + REPLACE(QUOTENAME(s.name), '''', '''''') + '.'
+                      + REPLACE(QUOTENAME(o.name), '''', '''''') + '
+                FOR XML
+                    PATH(''''), TYPE
+            )
+            .value(''.'', ''nvarchar(max)'')
+            , 1, 1, '''')
+          + @NL
+          + '';'' + @NL
+        ;
+    '
+    FROM
+        @schemas s
+    INNER JOIN
+        sys.tables o
+        ON o.schema_id = s.schema_id
+    WHERE 0=0
+        AND o.is_ms_shipped = 0
+        AND o.is_external   = 0
+        AND o.is_filetable  = 0
+        AND EXISTS (
+            SELECT NULL FROM #populated_tables
+            WHERE s.name + '.' + o.name LIKE pattern
+        )
+    ORDER BY
+        s.name, o.name
+    FOR XML
+        PATH(''), TYPE
+)
+.value('.', 'nvarchar(max)')
+;
+
+EXEC(@Sql);
+
+-- -----------------------------------------------------------------------------
 -- Computed Columns, Views, Functions, and Procedures
 --
 -- Objects containing free-form SQL code can both depend on and be dependend on
@@ -1181,143 +1321,3 @@ SELECT sql =
         PATH(''), TYPE
 )
 .value('.', 'nvarchar(max)');
-
--- -----------------------------------------------------------------------------
--- Data
-
-DECLARE @Sql nvarchar(max);
-
-WITH formats AS
-(
-    SELECT
-        t.user_type_id,
-        format = CASE ISNULL(b.name, t.name)
-            WHEN 'char'             THEN 2 -- quoted/escaped
-            WHEN 'nchar'            THEN 2 -- quoted/escaped
-            WHEN 'varchar'          THEN 2 -- quoted/escaped
-            WHEN 'nvarchar'         THEN 2 -- quoted/escaped
-            WHEN 'uniqueidentifier' THEN 1 -- quoted
-            WHEN 'datetime'         THEN 1 -- quoted
-            WHEN 'smalldatetime'    THEN 1 -- quoted
-            WHEN 'datetime2'        THEN 1 -- quoted
-            WHEN 'datetimeoffset'   THEN 1 -- quoted
-            WHEN 'date'             THEN 1 -- quoted
-            WHEN 'time'             THEN 1 -- quoted
-            WHEN 'geography'        THEN 1 -- quoted?
-            WHEN 'geometry'         THEN 1 -- quoted?
-            ELSE                         0 -- bare
-        END
-    FROM
-        sys.types t -- nominal type, possibly user-defined
-    LEFT JOIN
-        sys.types b -- base type if t is user-defined
-        ON  b.user_type_id = t.system_type_id
-        AND 1              = t.is_user_defined
-    WHERE 0=0
-        AND t.is_table_type = 0
-        AND t.name         != 'timestamp'
-)
-SELECT @Sql =
-'
-    DECLARE
-        @NL nchar(2) = CHAR(13) + CHAR(10),
-        @QT nchar(1) = CHAR(39);
-'
-+
-(
-    SELECT '
-        SELECT sql
-          = ''INSERT ' + REPLACE(QUOTENAME(s.name), '''', '''''') + '.'
-                       + REPLACE(QUOTENAME(o.name), '''', '''''') + ''' + @NL
-          + ''    ( '
-
-          + STUFF((
-                SELECT
-                    ', ' + REPLACE(QUOTENAME(c.name), '''', '''''')
-                FROM
-                    sys.columns c
-                INNER JOIN
-                    formats f
-                    ON f.user_type_id = c.system_type_id
-                WHERE 0=0
-                    AND c.object_id   = o.object_id
-                    AND c.is_computed = 0
-                    AND c.is_identity = 0
-                ORDER BY
-                    c.column_id
-                FOR XML
-                    PATH(''), TYPE
-            )
-            .value('.', 'nvarchar(max)')
-            , 1, 2, '')
-
-          + ' )'' + @NL
-          + ''VALUES''
-          + STUFF((
-                SELECT _
-                  = '','' + @NL + ''    ( '''
-                  + STUFF((
-                        SELECT _
-                          = ' + '', ''' + @NL
-                          + '              + '
-                          + 'ISNULL('
-                          + IIF(f.format > 0, '@QT + ', '')
-                          + IIF(f.format > 1, 'REPLACE(', '')
-                          + 'CONVERT(nvarchar(max), '
-                          + REPLACE(QUOTENAME(c.name), '''', '''''')
-                          + ')'
-                          + IIF(f.format > 1, ', @QT, @QT+@QT)', '')
-                          + IIF(f.format > 0, ' + @QT', '')
-                          + ', ''NULL'')'
-                        FROM
-                            sys.columns c
-                        INNER JOIN
-                            formats f
-                            ON f.user_type_id = c.system_type_id
-                        WHERE 0=0
-                            AND c.object_id   = o.object_id
-                            AND c.is_computed = 0
-                            AND c.is_identity = 0
-                        ORDER BY
-                            c.column_id
-                        FOR XML
-                            PATH(''), TYPE
-                    )
-                    .value('.', 'nvarchar(max)')
-                    , 1, 7, '')
-                  + '
-                  + '' )''
-                FROM
-                    ' + REPLACE(QUOTENAME(s.name), '''', '''''') + '.'
-                      + REPLACE(QUOTENAME(o.name), '''', '''''') + '
-                FOR XML
-                    PATH(''''), TYPE
-            )
-            .value(''.'', ''nvarchar(max)'')
-            , 1, 1, '''')
-          + @NL
-          + '';'' + @NL
-        ;
-    '
-    FROM
-        @schemas s
-    INNER JOIN
-        sys.tables o
-        ON o.schema_id = s.schema_id
-    WHERE 0=0
-        AND o.is_ms_shipped = 0
-        AND o.is_external   = 0
-        AND o.is_filetable  = 0
-        AND EXISTS (
-            SELECT NULL FROM #populated_tables
-            WHERE s.name + '.' + o.name LIKE pattern
-        )
-    ORDER BY
-        s.name, o.name
-    FOR XML
-        PATH(''), TYPE
-)
-.value('.', 'nvarchar(max)')
-;
-
-EXEC(@Sql);
