@@ -1307,21 +1307,17 @@ SELECT
 -- -----------------------------------------------------------------------------
 -- Output
 
-SELECT sql =
-(
-    SELECT ''
-        + '-- ----------------------------------------------------------------------------' + @NL
-        + 'PRINT ''+ ' + kind + ': ' + name + ''''                                          + @NL
-        + 'GO'                                                                              + @NL
-        + ''                                                                                + @NL
-        + sql                                                  + IIF(RIGHT(sql, 2) = @NL, '', @NL)
-        + 'GO'                                                                              + @NL
-        + ''                                                                                + @NL
-    FROM
-        #steps
-    ORDER BY
-        step_id
-    FOR XML
-        PATH(''), TYPE
-)
-.value('.', 'nvarchar(max)');
+SELECT
+    kind, name, sql
+    = '-- ----------------------------------------------------------------------------' + @NL
+    + 'PRINT ''+ ' + kind + ': ' + name + ''''                                          + @NL
+    + 'GO'                                                                              + @NL
+    + ''                                                                                + @NL
+    + sql                                                  + IIF(RIGHT(sql, 2) = @NL, '', @NL)
+    + 'GO'                                                                              + @NL
+    + ''                                                                                + @NL
+FROM
+    #steps
+ORDER BY
+    step_id
+;
