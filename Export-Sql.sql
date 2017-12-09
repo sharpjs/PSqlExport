@@ -983,7 +983,7 @@ ORDER BY
 
 INSERT #steps (kind, name, sql)
 SELECT
-    'foreign key', s.name + '.' + t.name + '.' + k.name,
+    'fk', s.name + '.' + t.name + '.' + k.name,
     sql =
     'ALTER TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name) + @NL +
     '    ADD CONSTRAINT ' + QUOTENAME(k.name)                    + @NL +
@@ -1048,7 +1048,7 @@ ORDER BY
 
 INSERT #steps (kind, name, sql)
 SELECT
-    'default', s.name + '.' + t.name + '.' + d.name,
+    'df', s.name + '.' + t.name + '.' + d.name,
     sql=
     'ALTER TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name) + @NL +
     '    ADD ' +
@@ -1080,7 +1080,7 @@ ORDER BY
 
 INSERT #steps (kind, name, sql)
 SELECT
-    'check constraint', /*s.name + '.' + t.name + '.' +*/ c.name,
+    'ck', /*s.name + '.' + t.name + '.' +*/ c.name,
     sql =
     'ALTER TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name) + @NL +
     '    ADD CONSTRAINT ' + QUOTENAME(c.name)                    + @NL +
@@ -1107,7 +1107,7 @@ ORDER BY
 
 INSERT #steps (kind, name, sql)
 SELECT
-    'trigger', s.name + '.' + r.name, OBJECT_DEFINITION(r.object_id)
+    'trig', s.name + '.' + r.name, OBJECT_DEFINITION(r.object_id)
 FROM
     @schemas s
 INNER JOIN
@@ -1220,7 +1220,7 @@ WITH properties AS
 )
 INSERT #steps (kind, name, sql)
 SELECT
-    'properties', '(all)', sql
+    'prop', '(all)', sql
 FROM
     properties_sql
 WHERE
@@ -1232,7 +1232,7 @@ WHERE
 
 INSERT #steps (kind, name, sql)
 SELECT
-    'permissions', '(all)',
+    'perm', '(all)',
     sql =
     (
         SELECT
