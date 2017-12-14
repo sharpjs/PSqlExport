@@ -288,7 +288,7 @@ SELECT
         WHEN p.type = 'R' THEN
             'CREATE ROLE {name} AUTHORIZATION dbo;' + @NL
         WHEN p.type = 'S' AND p.authentication_type = 2 THEN
-            'CREATE USER {name} WITH PASSWORD = '''';' + @NL
+            'CREATE USER {name} WITH PASSWORD = ''' + CONVERT(sysname, NEWID()) + ''';' + @NL
         ELSE
             'CREATE USER {name} WITHOUT LOGIN;' + @NL
         END,
