@@ -718,7 +718,7 @@ EXEC(@Sql);
 --     Priority 0: Objects on which nothing depends: (e, q)
 --     Priority 1: Objects the prior set depends on: (o, z)
 --     Priority 2: Objects the prior set depends on: (y)
---     Priority 3: Objects teh prior set depends on: (m, x)
+--     Priority 3: Objects the prior set depends on: (m, x)
 --
 --     Create the objects in order from greatest to least priority.
 --
