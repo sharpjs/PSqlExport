@@ -88,10 +88,12 @@ IF OBJECT_ID('tempdb..#steps') IS NOT NULL
 
 CREATE TABLE #steps
 (
-    step_id     int IDENTITY    NOT NULL PRIMARY KEY,
+    step_id     int IDENTITY    NOT NULL,
     kind        sysname         NOT NULL,
     name        nvarchar(257)   NOT NULL, -- max schema.object length
-    sql         nvarchar(max)   NOT NULL
+    sql         nvarchar(max)   NOT NULL,
+
+    PRIMARY KEY (step_id)
 );
 
 -- -----------------------------------------------------------------------------
@@ -104,8 +106,8 @@ DECLARE @schemas TABLE
     schema_id   int         NOT NULL,
     name        sysname     COLLATE CATALOG_DEFAULT NOT NULL,
 
-    PRIMARY KEY (schema_id),
-    UNIQUE      (name)
+    PRIMARY KEY         (schema_id),
+    INDEX ux_1 UNIQUE   (name)
 );
 
 INSERT @schemas
