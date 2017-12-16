@@ -117,7 +117,6 @@ FROM
     sys.schemas
 WHERE 0=0
     AND name NOT IN ('sys', 'INFORMATION_SCHEMA')
-    AND name NOT LIKE '[_][_]%' -- internal schema prefix
     AND NOT EXISTS (SELECT 0 FROM #excluded_schemas WHERE name LIKE pattern)
 ;
 
@@ -345,7 +344,6 @@ WHERE 0=0
     -- Exclude built-in schemas
     AND name NOT IN ('dbo', 'guest', 'sys', 'INFORMATION_SCHEMA')
     AND name NOT LIKE 'db[_]%'
-    AND name NOT LIKE '[_][_]%' -- internal schema prefix
     AND NOT EXISTS (SELECT 0 FROM #excluded_schemas WHERE name LIKE pattern)
 ORDER BY
     name
