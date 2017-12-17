@@ -153,6 +153,88 @@ WHERE 0=0
 ;
 
 -- -----------------------------------------------------------------------------
+-- Object Lookup
+--
+-- Contains only the objects selected for export.
+
+IF OBJECT_ID('tempdb..#objects') IS NOT NULL
+    DROP TABLE #objects;
+
+CREATE TABLE #objects
+(
+    object_id   int                                 NOT NULL,
+    schema_id   int                                 NOT NULL,
+    type        char(2) COLLATE CATALOG_DEFAULT     NOT NULL,
+    schema_name sysname COLLATE CATALOG_DEFAULT     NOT NULL,
+    object_name sysname COLLATE CATALOG_DEFAULT     NOT NULL,
+
+    display_name    AS           schema_name  + '.' +           object_name,
+    quoted_name     AS QUOTENAME(schema_name) + '.' + QUOTENAME(object_name),
+
+    PRIMARY KEY (object_id),
+);
+
+CREATE UNIQUE INDEX ux_1
+    ON #objects (schema_name, object_name)
+    INCLUDE     (type, schema_id);
+
+CREATE UNIQUE INDEX ux_2
+    ON #objects (type, schema_name, object_name)
+    INCLUDE     (schema_id);
+
+INSERT #objects
+SELECT
+    o.object_id,
+    o.schema_id,
+    o.type,
+    schema_name = s.name,
+    object_name = o.name
+FROM
+    #schemas s
+INNER JOIN
+    sys.objects o
+    ON o.schema_id = s.schema_id
+LEFT JOIN
+    sys.tables t
+    ON  t.object_id = o.object_id
+    AND 'U'         = o.type
+WHERE 0=0
+    AND o.type IN (
+    --  'AF', -- Aggregate function (CLR)
+        'C',  -- CHECK constraint
+        'D',  -- DEFAULT constraint (or stand-alone)
+        'F',  -- FOREIGN KEY constraint
+        'FN', -- SQL scalar function
+    --  'FS', -- Assembly (CLR) scalar-function
+    --  'FT', -- Assembly (CLR) table-valued function
+        'IF', -- SQL inline table-valued function
+    --  'IT', -- Internal table
+        'P',  -- SQL Stored Procedure
+    --  'PC', -- Assembly (CLR) stored-procedure
+    --  'PG', -- Plan guide
+        'PK', -- PRIMARY KEY constraint
+    --  'R',  -- Rule (stand-alone)
+    --  'RF', -- Replication-filter-procedure
+    --  'S',  -- System base table
+    --  'SN', -- Synonym
+    --  'SO', -- Sequence object
+        'U',  -- Table (user-defined)
+        'V',  -- View
+    --  'SQ', -- Service queue
+    --  'TA', -- Assembly (CLR) DML trigger
+        'TF', -- SQL table-valued-function
+        'TR', -- SQL DML trigger
+    --  'TT', -- Table type
+        'UQ'  -- UNIQUE constraint
+    --  'X'   -- Extended stored procedure
+    )
+    AND        o.is_ms_shipped    = 0
+    AND ISNULL(t.is_external,  0) = 0
+    AND ISNULL(t.is_filetable, 0) = 0
+    AND NOT EXISTS (SELECT 0 FROM #excluded_objects x WHERE o.name LIKE x.pattern)
+;
+
+-- -----------------------------------------------------------------------------
 -- Type Lookup
 --
 -- * column    -> user type name
