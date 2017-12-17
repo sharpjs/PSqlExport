@@ -101,6 +101,38 @@ CREATE TABLE #steps
 --
 -- Contains only the schemas selected for export.
 
+IF OBJECT_ID('tempdb..#schemas') IS NOT NULL
+    DROP TABLE #schemas;
+
+CREATE TABLE #schemas
+(
+    schema_id   int                                 NOT NULL,
+    name        sysname COLLATE CATALOG_DEFAULT     NOT NULL,
+
+    display_name    AS           name,
+    quoted_name     AS QUOTENAME(name),
+
+    PRIMARY KEY (schema_id),
+);
+
+CREATE UNIQUE INDEX ux_1
+    ON #schemas (name);
+
+INSERT #schemas
+SELECT
+    schema_id, name
+FROM
+    sys.schemas
+WHERE 0=0
+    AND name NOT IN ('sys', 'INFORMATION_SCHEMA')
+    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas x WHERE name LIKE x.pattern)
+;
+
+-- -----------------------------------------------------------------------------
+-- Schema Lookup
+--
+-- Contains only the schemas selected for export.
+
 DECLARE @schemas TABLE
 (
     schema_id   int         NOT NULL,
