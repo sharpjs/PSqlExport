@@ -604,75 +604,8 @@ ORDER BY
 ;
 
 -- -----------------------------------------------------------------------------
--- Tables
-
-INSERT #steps (kind, name, sql)
-SELECT
-    'table', s.name + '.' + t.name,
-    --
-    'CREATE TABLE ' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name) + @NL
-  + '(' + @NL
-  + STUFF((
-        SELECT ',' + @NL
-          + '    '
-          + QUOTENAME(c.name)
-          + REPLICATE(' ', 2 +
-                MAX(LEN(QUOTENAME(c.name))) OVER ()
-                  - LEN(QUOTENAME(c.name))
-            )
-          + ty.type
-          + REPLICATE(' ', 2 +
-                MAX(LEN(ty.type)) OVER ()
-                  - LEN(ty.type)
-            )
-          + ISNULL(' COLLATE ' + NULLIF(c.collation_name, @Collation), '')
-          + IIF(c.is_filestream = 1, ' FILESTREAM', '')
-          + IIF(c.is_sparse     = 1, ' SPARSE',     '')
-          + IIF(c.is_nullable   = 1, IIF(c.is_computed = 0, ' NULL', ''), ' NOT NULL')
-          + ISNULL(' IDENTITY('
-              + CONVERT(nvarchar(max), i.seed_value)      + ', '
-              + CONVERT(nvarchar(max), i.increment_value) + ')'
-              + IIF(i.is_not_for_replication = 1, ' NOT FOR REPLICATION', '')
-              , '')
-          + IIF(c.is_rowguidcol = 1, ' ROWGUIDCOL', '')
-            -- Not supported: MASKED WITH (FUNCTION = '...')
-            -- Not supported: GENERATED ALWAYS
-            -- Not supported: ENCRYPTED
-        FROM
-            sys.columns c
-        INNER JOIN
-            @types ty
-            ON  ty.major_id = c.object_id
-            AND ty.minor_id = c.column_id
-        LEFT JOIN
-            sys.identity_columns i
-            ON  i.object_id = c.object_id
-            AND i.column_id = c.column_id
-        WHERE 0=0
-            AND c.object_id = t.object_id
-            AND c.is_computed   = 0
-            AND c.is_column_set = 0
-        ORDER BY
-            c.column_id
-        FOR XML
-            PATH(''), TYPE
-    ).value('.', 'nvarchar(max)'), 1, 3, '') + @NL
-  + ');' + @NL
-FROM
-    @schemas s
-INNER JOIN
-    sys.tables t
-    ON t.schema_id = s.schema_id
-WHERE 0=0
-    AND t.is_ms_shipped = 0
-    AND t.is_external   = 0
-    AND t.is_filetable  = 0
-ORDER BY
-    s.name, t.name
-;
-
--- -----------------------------------------------------------------------------
--- Computed Columns, Views, Functions, and Procedures
+-- Interdependent Objects:
+--   Tables (Due to Computed Columns), Views, Functions, and Procedures
 --
 -- Objects containing free-form SQL code can both depend on and be dependend on
 -- by other such objects, via references to objects within the SQL code.  Thus
@@ -693,101 +626,250 @@ ORDER BY
 --     Create the objects in order from greatest to least priority.
 --
 
--- First, discover the objects that can be arbitrarily interdependent.
+-- Discover potential chunk boundaries for tables.
 
-DECLARE @objects TABLE
+DECLARE @column_depends TABLE
 (
-    object_id   int             NOT NULL,
-    column_id   int             NOT NULL,
-    type        char(4)         NOT NULL,
-    schema_name sysname         NOT NULL,
-    object_name sysname         NOT NULL,
-    column_name sysname             NULL,
-    expression  nvarchar(max)       NULL,
+    object_id           int     NOT NULL,
+    ordinal             int     NOT NULL,
+    using_column_id     int     NOT NULL,
+    used_column_id_max  int     NOT NULL,
 
-    PRIMARY KEY (object_id, column_id)
+    PRIMARY KEY         (object_id, ordinal),
+    INDEX ux_1 UNIQUE   (object_id, using_column_id)
 );
 
-INSERT @objects
+-- ... Potential chunk boundaries caused by indirectly self-referent computed columns.
+WITH computed_column_depends AS
+(
+    SELECT
+        depth            = 0,
+        using_object_id  = o.object_id,
+        using_column_id  = d.referencing_minor_id,
+        used_object_name = r.quoted_name,
+        used_object_id   = d.referenced_id,
+        used_column_id   = ISNULL(d.referenced_minor_id, 0)
+    FROM
+        #objects o
+    CROSS APPLY
+        sys.dm_sql_referenced_entities(o.quoted_name, 'OBJECT') d
+    INNER JOIN
+        #objects r
+        ON r.object_id = d.referenced_id
+    WHERE 0=0
+        AND o.type                 = 'U' -- in table
+        AND d.referencing_minor_id > 0   -- referencing: column
+        AND d.referenced_class     = 1   -- referenced:  object or column
+  UNION ALL
+    SELECT
+        depth            = x.depth + 1,
+        using_object_id  = x.using_object_id,
+        using_column_id  = x.using_column_id,
+        used_object_name = r.quoted_name,
+        used_object_id   = d.referenced_id,
+        used_column_id   = ISNULL(d.referenced_minor_id, 0)
+    FROM
+        computed_column_depends x
+    CROSS APPLY
+        sys.dm_sql_referenced_entities(x.used_object_name, 'OBJECT') d
+    INNER JOIN
+        #objects r
+        ON r.object_id = d.referenced_id
+    WHERE 0=0
+        -- Stop if refs traced back to computed column's own table
+        AND x.used_object_id != x.using_object_id
+        --
+        AND ISNULL(d.referencing_minor_id, 0) = x.used_column_id   -- referencing: object or column
+        AND d.referenced_class                = 1                  -- referenced:  object or column
+)
+INSERT @column_depends
 SELECT
-    c.*
+    object_id          = using_object_id,
+    ordinal            = DENSE_RANK() OVER (
+                             PARTITION BY using_object_id
+                             ORDER BY     using_column_id
+                         ),
+    using_column_id    = using_column_id,
+    used_column_id_max = MAX(used_column_id)
 FROM
-    @schemas s
-INNER JOIN
-    sys.objects o
-    ON o.schema_id = s.schema_id
-CROSS APPLY
-    (
-        -- views, functions, procedures
-        SELECT
-            object_id   = o.object_id,
-            column_id   = 0,
-            type        = CASE o.type
-                            WHEN 'V'  THEN 'view'
-                            WHEN 'P'  THEN 'proc'
-                            WHEN 'FN' THEN 'func'
-                            WHEN 'IF' THEN 'func'
-                            WHEN 'TF' THEN 'func'
-                            ELSE NULL
-                          END,
-            schema_name = s.name,
-            object_name = o.name,
-            column_name = NULL,
-            expression  = NULL
-        WHERE
-            o.type IN ('V', 'P', 'FN', 'IF', 'TF')
-        UNION ALL
-        -- computed columns
-        SELECT
-            object_id   = c.object_id,
-            column_id   = c.column_id,
-            type        = 'ccol',
-            schema_name = s.name,
-            object_name = o.name,
-            column_name = c.name,
-            expression  = c.definition
-        FROM
-            sys.computed_columns c
-        WHERE
-            c.object_id = o.object_id
-    ) c
+    computed_column_depends
+WHERE 0=0
+    -- Only refs to a computed column's own table
+    AND used_object_id = using_object_id
+    -- Only refs that are indirect via some other object (e.g. a function)
+    AND depth > 0
+GROUP BY
+    using_object_id,
+    using_column_id
 ;
 
--- Next, discover the dependencies between those objects.
+-- ... Potential chunk boundary at the end of every table.
+--     Pretend there is a computed column just beyond the last column.
+INSERT @column_depends
+SELECT
+    o.object_id,
+    ordinal            = ISNULL(d.ordinal + 1, 1),
+    using_column_id    = c.column_id + 1,
+    used_column_id_max = c.column_id
+FROM
+    #objects o
+CROSS APPLY
+    (
+        -- Max column_id
+        SELECT TOP 1 c.column_id
+        FROM sys.columns c
+        WHERE c.object_id = o.object_id
+        ORDER BY c.column_id DESC
+    ) c
+OUTER APPLY
+    (
+        -- Max ordinal
+        SELECT TOP 1 d.ordinal
+        FROM @column_depends d
+        WHERE d.object_id = o.object_id
+        ORDER BY d.ordinal DESC
+    ) d
+WHERE 0=0
+    AND o.type = 'U' -- table
+;
+
+-- Discover tables split into as few chunks as possible
+
+DECLARE @object_parts TABLE
+(
+    object_id       int             NOT NULL,
+    column_id_min   int             NOT NULL,
+    column_id_max   int             NOT NULL,
+    type            char(4)         NOT NULL,
+    schema_name     sysname         NOT NULL,
+    object_name     sysname         NOT NULL,
+    column_name     sysname             NULL,
+
+    PRIMARY KEY (object_id, column_id_min)
+);
+
+WITH chunks AS
+(
+    SELECT
+        object_id,
+        ordinal,
+        use_chunk     = 1,
+        column_id_min = 0, -- 0 to catch refs to table but without column info
+        column_id_max = using_column_id - 1
+    FROM
+        @column_depends
+    WHERE
+        ordinal = 1
+  UNION ALL
+    SELECT
+        this.object_id,
+        this.ordinal,
+        use_chunk =
+            CASE
+                WHEN this.used_column_id_max > prev.column_id_max
+                THEN 1 -- will accept this record
+                ELSE 0 -- will ignore this record
+            END,
+        column_id_min = 
+            CASE
+                WHEN this.used_column_id_max > prev.column_id_max
+                THEN prev.column_id_max + 1     -- compute new value
+                ELSE prev.column_id_min         -- keep at old value
+            END,
+        column_id_max =
+            CASE
+                WHEN this.used_column_id_max > prev.column_id_max
+                THEN this.using_column_id - 1   -- compute new value
+                ELSE prev.column_id_max         -- keep at old value
+            END
+    FROM
+        chunks prev
+    INNER JOIN
+        @column_depends this
+        ON  this.object_id = prev.object_id
+        AND this.ordinal   = prev.ordinal + 1
+)
+INSERT @object_parts
+SELECT
+    object_id,
+    column_id_min,
+    column_id_max,
+    type        = 'tabl',
+    schema_name = OBJECT_SCHEMA_NAME (object_id),
+    object_name = OBJECT_NAME        (object_id),
+    column_name = COL_NAME           (object_id, column_id_min)
+FROM
+    chunks
+WHERE
+    use_chunk = 1
+ORDER BY
+    OBJECT_SCHEMA_NAME (object_id),
+    OBJECT_NAME        (object_id),
+    column_id_min
+;
+
+-- Discover views, functions, and procedures
+
+INSERT @object_parts
+SELECT
+    object_id     = o.object_id,
+    column_id_min = 0,
+    column_id_max = 0,
+    type          = CASE o.type
+                        WHEN 'V'  THEN 'view'
+                        WHEN 'P'  THEN 'proc'
+                        WHEN 'FN' THEN 'func'
+                        WHEN 'IF' THEN 'func'
+                        WHEN 'TF' THEN 'func'
+                        ELSE NULL
+                    END,
+    o.schema_name,
+    o.object_name,
+    column_name = NULL
+FROM
+    #objects o
+WHERE 0=0
+    AND o.type IN ('V', 'FN', 'IF', 'TF', 'P')
+;
+
+-- Discover the dependencies between tables, views, functions, and procedures.
 
 DECLARE @depends TABLE
 (
     using_object_id     int     NOT NULL,
     using_column_id     int     NOT NULL,
     used_object_id      int     NOT NULL,
-    used_column_id      int     NOT NULL
+    used_column_id      int     NOT NULL,
 
-    PRIMARY KEY (using_object_id, using_column_id,  used_object_id,  used_column_id),
-    UNIQUE      ( used_object_id,  used_column_id, using_object_id, using_column_id)
+    PRIMARY KEY       (using_object_id, using_column_id,  used_object_id,  used_column_id),
+    INDEX ux_1 UNIQUE (using_object_id, using_column_id,  used_object_id,  used_column_id) WHERE (using_column_id > 0),
+    INDEX ux_2 UNIQUE ( used_object_id,  used_column_id, using_object_id, using_column_id)
 );
 
 INSERT @depends
-SELECT
-    o.object_id,
-    o.column_id,
-    d.referenced_id,
-    d.referenced_minor_id
+SELECT DISTINCT
+    using_object_id = o.object_id,
+    using_column_id = o.column_id_min,
+    used_object_id  = r.object_id,
+    used_column_id  = r.column_id_min
 FROM
-    @objects o
+    @object_parts o -- using
 CROSS APPLY
     sys.dm_sql_referenced_entities(
         QUOTENAME(o.schema_name) + '.' + QUOTENAME(o.object_name),
         'OBJECT'
     ) d
+INNER JOIN
+    @object_parts r -- used
+    ON  r.object_id      = d.referenced_id
+    AND r.column_id_min <= d.referenced_minor_id
+    AND r.column_id_max >= d.referenced_minor_id
 WHERE 0=0
-    AND d.referencing_minor_id = o.column_id
-    AND d.referenced_class     = 1 -- object or column
-    AND EXISTS (
-        SELECT 0 FROM @objects x
-        WHERE 0=0
-            AND x.object_id = d.referenced_id
-            AND x.column_id = d.referenced_minor_id
-    )
+    AND d.referencing_minor_id >= o.column_id_min
+    AND d.referencing_minor_id <= o.column_id_max
+    AND d.referenced_class      = 1 -- object or column
+    -- No direct self-references
+    AND o.object_id != r.object_id
 ;
 
 -- Compute dependency order and add appropriate DDL to the steps.
@@ -798,15 +880,15 @@ WITH prioritizing AS
     SELECT
         n = 0, o.*
     FROM
-        @objects o
+        @object_parts o
     WHERE
         NOT EXISTS (
             SELECT 0 FROM @depends d
             WHERE 0=0
                 AND d.used_object_id = o.object_id
-                AND d.used_column_id = o.column_id
+                AND d.used_column_id = o.column_id_min
         )
-    UNION ALL
+  UNION ALL
     -- Next higher: objects on which the prior set depends
     SELECT
         n = n + 1, o.*
@@ -815,42 +897,113 @@ WITH prioritizing AS
     INNER JOIN
         @depends d
         ON  d.using_object_id = x.object_id
-        AND d.using_column_id = x.column_id
+        AND d.using_column_id = x.column_id_min
     INNER JOIN
-        @objects o
-        ON  o.object_id = d.used_object_id
-        AND o.column_id = d.used_column_id
+        @object_parts o
+        ON  o.object_id     = d.used_object_id
+        AND o.column_id_min = d.used_column_id
 )
 , prioritized_objects AS
 (
-    SELECT priority = MAX(n), object_id, column_id, type, schema_name, object_name, column_name, expression
+    SELECT
+        priority = MAX(n),
+        object_id, column_id_min, column_id_max,
+        type, schema_name, object_name, column_name
     FROM prioritizing
-    GROUP BY object_id, column_id, type, schema_name, object_name, column_name, expression
+    GROUP BY
+        object_id, column_id_min, column_id_max,
+        type, schema_name, object_name, column_name
 )
 INSERT #steps (kind, name, sql)
 SELECT
     kind  = o.type,
     name  = o.schema_name + '.' + o.object_name + ISNULL('.' + o.column_name, ''),
-    sql   = CASE type
-        WHEN 'ccol' THEN
-           'ALTER TABLE ' + QUOTENAME(o.schema_name) + '.' + QUOTENAME(o.object_name) + @NL
-          + '    ADD ' + QUOTENAME(c.name) + @NL
-          + '    AS ' + c.definition
-          + IIF(c.is_persisted = 1,             @NL + '    PERSISTED', '')
-          + IIF(c.is_persisted = 1 AND c.is_nullable = 0, ' NOT NULL', '')
-          + ';' + @NL
-        ELSE
+    sql   = CASE
+        WHEN type != 'tabl' THEN
             OBJECT_DEFINITION(o.object_id)
+        ELSE
+            CASE o.column_id_min
+                WHEN 0 THEN
+                    'CREATE TABLE ' + QUOTENAME(o.schema_name) + '.' + QUOTENAME(o.object_name) + @NL
+                  + '(' + @NL
+                ELSE
+                    'ALTER TABLE ' + QUOTENAME(o.schema_name) + '.' + QUOTENAME(o.object_name) + ' ADD' +  @NL
+            END
+          + STUFF((
+                SELECT ',' + @NL
+                  + '    '
+                  + QUOTENAME(c.name)
+                  + REPLICATE(' ', 2 +
+                        MAX(LEN(QUOTENAME(c.name))) OVER ()
+                          - LEN(QUOTENAME(c.name))
+                    )
+                  + CASE c.is_computed
+                        WHEN 0 THEN
+                            ty.type
+                          + REPLICATE(' ', 2 +
+                                MAX(LEN(ty.type)) OVER ()
+                                  - LEN(ty.type)
+                            )
+                          + ISNULL(' COLLATE ' + NULLIF(c.collation_name, @Collation), '')
+                          + IIF(c.is_filestream = 1, ' FILESTREAM', '')
+                          + IIF(c.is_sparse     = 1, ' SPARSE',     '')
+                          + IIF(c.is_nullable   = 1, IIF(c.is_computed = 0, ' NULL', ''), ' NOT NULL')
+                          + ISNULL(' IDENTITY('
+                              + CONVERT(nvarchar(max), i.seed_value)      + ', '
+                              + CONVERT(nvarchar(max), i.increment_value) + ')'
+                              + IIF(i.is_not_for_replication = 1, ' NOT FOR REPLICATION', '')
+                              , '')
+                          + IIF(c.is_rowguidcol = 1, ' ROWGUIDCOL', '')
+                            -- Not supported: MASKED WITH (FUNCTION = '...')
+                            -- Not supported: GENERATED ALWAYS
+                            -- Not supported: ENCRYPTED
+                        ELSE
+                            'AS ' + f.definition
+                          + IIF(f.is_persisted = 1,                      ' PERSISTED', '')
+                          + IIF(f.is_persisted = 1 AND f.is_nullable = 0, ' NOT NULL', '')
+                    END
+                FROM
+                    sys.columns c
+                INNER JOIN
+                    @types ty
+                    ON  ty.major_id = c.object_id
+                    AND ty.minor_id = c.column_id
+                LEFT JOIN
+                    sys.identity_columns i
+                    ON  i.object_id = c.object_id
+                    AND i.column_id = c.column_id
+                LEFT JOIN
+                    sys.computed_columns f
+                    ON  f.object_id = c.object_id
+                    AND f.column_id = c.column_id
+                WHERE 0=0
+                    AND c.object_id     = o.object_id
+                    AND c.column_id     BETWEEN o.column_id_min AND o.column_id_max
+                    AND c.is_column_set = 0
+                ORDER BY
+                    c.column_id
+                FOR XML
+                    PATH(''), TYPE
+            ).value('.', 'nvarchar(max)'), 1, 3, '') + @NL
+          + CASE o.column_id_min
+                WHEN 0 THEN
+                    ');' + @NL
+                ELSE
+                    ';' + @NL
+            END
     END
 FROM
     prioritized_objects o
-LEFT JOIN
-    sys.computed_columns c
-    ON       'ccol' = o.type
-    AND c.object_id = o.object_id
-    AND c.column_id = o.column_id
 ORDER BY
-    o.priority DESC, o.schema_name, o.object_name, c.name
+    o.priority DESC,
+    o.schema_name,
+    CASE o.type
+        WHEN 'tabl' THEN 0
+        WHEN 'view' THEN 1
+        ELSE             2
+    END,
+    o.object_name,
+    o.column_id_min
 ;
 
 -- -----------------------------------------------------------------------------
