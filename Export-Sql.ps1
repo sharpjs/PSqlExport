@@ -24,13 +24,13 @@ function Export-Sql {
     #>
     [CmdletBinding(DefaultParameterSetName="Database")]
     param (
-        # Exports the named database on the local default instance using integrated authentication.
+        # Name of the database to export on the local default SQL Server instance using integrated authentication.
         [Parameter(Mandatory, Position=0, ParameterSetName="Database")]
         [string] $Database,
 
-        # Exports the connection's current database.
-        [Parameter(Mandatory, ParameterSetName="Connection")]
-        [System.Data.SqlClient.SqlConnection] $Connection,
+        # Object specifying how to connect to the database to export.  Created by New-SqlConnectionInfo.
+        [Parameter(Mandatory, ParameterSetName="Source", ValueFromPipeline)]
+        [PSCustomObject] $Source,
 
         # Exclude schemas where the name matches any of the given LIKE patterns.
         [string[]] $ExcludeSchemas,
@@ -42,12 +42,17 @@ function Export-Sql {
         [string[]] $IncludeData
     )
 
-    # Open a connection if one is not already open
-    $OwnsConnection = Use-SqlConnection ([ref] $Connection) $Database
+    $Connection = $null
+
+    if ($Database) {
+        $Source = New-SqlConnectionInfo . $Database
+    }
 
     try {
+        $Connection = $Source | Connect-Sql
+
         # Persist parameters in temporary tables
-        Invoke-Sql -Connection $Connection -Raw -Sql "
+        Invoke-Sql -Connection $Connection -Raw "
             IF OBJECT_ID('tempdb..#excluded_schemas') IS NOT NULL
                 DROP TABLE #excluded_schemas;
 
@@ -67,19 +72,19 @@ function Export-Sql {
                 (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
         "
         if ($ExcludeSchemas) {
-            Invoke-Sql -Connection $Connection -Sql "
+            Invoke-Sql -Connection $Connection "
                 INSERT #excluded_schemas
                 VALUES $( (($ExcludeSchemas | % { $_.Replace("'", "''") } | % { "('$_')" }) -join ", ") );
             "
         }
         if ($ExcludeObjects) {
-            Invoke-Sql -Connection $Connection -Sql "
+            Invoke-Sql -Connection $Connection "
                 INSERT #excluded_objects
                 VALUES $( (($ExcludeObjects | % { $_.Replace("'", "''") } | % { "('$_')" }) -join ", ") );
             "
         }
         if ($IncludeData) {
-            Invoke-Sql -Connection $Connection -Sql "
+            Invoke-Sql -Connection $Connection "
                 INSERT #populated_tables
                 VALUES $( (($IncludeData | % { $_.Replace("'", "''") } | % { "('$_')" }) -join ", ") );
             "
@@ -91,9 +96,6 @@ function Export-Sql {
         Invoke-Sql -Connection $Connection -Sql $Sql | % sql
     }
     finally {
-        # Close connection if we implicitly opened it
-        if ($OwnsConnection) {
-            Disconnect-Sql $Connection
-        }
+        Disconnect-Sql $Connection
     }
 }
