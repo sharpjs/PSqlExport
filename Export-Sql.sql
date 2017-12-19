@@ -1226,8 +1226,13 @@ SELECT
       + ')'
       , ''
     )
-  + ISNULL(@NL + '    WHERE ' + i.filter_definition, '')
-  + ';' + @NL
+  + @NL
+  + ISNULL('    WHERE ' + i.filter_definition + @NL, '')
+  + '    WITH ('
+  +     'PAD_INDEX = ' + IIF(i.is_padded = 1, 'ON', 'OFF')
+  +     IIF(i.is_padded = 1, ', FILLFACTOR = ' + CONVERT(nvarchar, i.fill_factor), '')
+  +     ', DATA_COMPRESSION = ' + ISNULL(p.data_compression_desc, 'NONE')
+  + ');' + @NL
 FROM
     @schemas s
 INNER JOIN
@@ -1236,6 +1241,11 @@ INNER JOIN
 INNER JOIN
     sys.indexes i
     ON i.object_id = t.object_id
+LEFT JOIN
+    sys.partitions p
+    ON  p.object_id        = i.object_id
+    AND p.index_id         = i.index_id
+    AND p.partition_number = 1
 WHERE 0=0
     AND t.is_ms_shipped = 0
     AND t.is_external   = 0
