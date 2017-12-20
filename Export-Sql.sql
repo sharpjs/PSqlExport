@@ -1051,95 +1051,98 @@ SELECT @Sql =
     DECLARE
         @NL nchar(2) = CHAR(13) + CHAR(10),
         @QT nchar(1) = CHAR(39);
-
-    WITH step AS
-    (
 '
 +
 (
     SELECT '
-        SELECT
-            kind = ''data'',
-            name = ''' + REPLACE(o.display_name, '''', '''''') + ''',
-            sql  = STUFF((
-                SELECT _ =
-                    CASE ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) % 1000 -- max insert count
-                        WHEN 1 THEN
-                            '';''                                                    + @NL +
-                            ''GO''                                                   + @NL +
-                            ''''                                                     + @NL +
-                            ''INSERT ' + REPLACE(o.quoted_name, '''', '''''') + '''  + @NL +
-                            ''    ( '                                                +
-                            -- column names
-                                STUFF((
-                                    SELECT
-                                        ', ' + REPLACE(QUOTENAME(c.name), '''', '''''')
-                                    FROM
-                                        sys.columns c
-                                    INNER JOIN
-                                        formats f
-                                        ON f.user_type_id = c.system_type_id
-                                    WHERE 0=0
-                                        AND c.object_id   = o.object_id
-                                        AND c.is_computed = 0
-                                        AND c.is_identity = 0
-                                    ORDER BY
-                                        c.column_id
-                                    FOR XML
-                                        PATH(''), TYPE
-                                )
-                                .value('.', 'nvarchar(max)')
-                                , 1, 2, '')                                          +
-                            ' )''                                                    + @NL +
-                            ''VALUES''                                               + @NL
-                        ELSE
-                            '',''                                                    + @NL
-                    END +
-                    ''    ( '' +
-                    '
-                    +
-                    -- values
-                    STUFF((
-                        SELECT _
-                          = ' + '', ''' + @NL
-                          + '              + '
-                          + 'ISNULL('
-                          +   IIF(f.quoting > 0, '@QT + ', '')
-                          +     IIF(f.quoting > 1, 'REPLACE(', '')
-                          +       'CONVERT(nvarchar(max), '
-                          +         QUOTENAME(c.name)
-                          +         f.style
-                          +       ')'
-                          +     IIF(f.quoting > 1, ', @QT, @QT+@QT)', '')
-                          +   IIF(f.quoting > 0, ' + @QT', '')
-                          + ', ''NULL'')'
-                        FROM
-                            sys.columns c
-                        INNER JOIN
-                            formats f
-                            ON f.user_type_id = c.system_type_id
-                        WHERE 0=0
-                            AND c.object_id   = o.object_id
-                            AND c.is_computed = 0
-                            AND c.is_identity = 0
-                        ORDER BY
-                            c.column_id
-                        FOR XML
-                            PATH(''), TYPE
-                    )
-                    .value('.', 'nvarchar(max)')
-                    , 1, 7, '')
-                    +
-                    ' + '' )''
-                FROM
-                    ' + o.quoted_name + '
-                FOR XML
-                    PATH(''''), TYPE
-            )
-            .value(''.'', ''nvarchar(max)'')
-            , 1, 9, '''')
-            +
-            '';''
+        WITH step AS
+        (
+            SELECT
+                kind = ''data'',
+                name = ''' + REPLACE(o.display_name, '''', '''''') + ''',
+                sql  = STUFF((
+                    SELECT _ =
+                        CASE ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) % 1000 -- max insert count
+                            WHEN 1 THEN
+                                '';''                                                    + @NL +
+                                ''GO''                                                   + @NL +
+                                ''''                                                     + @NL +
+                                ''INSERT ' + REPLACE(o.quoted_name, '''', '''''') + '''  + @NL +
+                                ''    ( '                                                +
+                                -- column names
+                                    STUFF((
+                                        SELECT
+                                            ', ' + REPLACE(QUOTENAME(c.name), '''', '''''')
+                                        FROM
+                                            sys.columns c
+                                        INNER JOIN
+                                            formats f
+                                            ON f.user_type_id = c.system_type_id
+                                        WHERE 0=0
+                                            AND c.object_id   = o.object_id
+                                            AND c.is_computed = 0
+                                            AND c.is_identity = 0
+                                        ORDER BY
+                                            c.column_id
+                                        FOR XML
+                                            PATH(''), TYPE
+                                    )
+                                    .value('.', 'nvarchar(max)')
+                                    , 1, 2, '')                                          +
+                                ' )''                                                    + @NL +
+                                ''VALUES''                                               + @NL
+                            ELSE
+                                '',''                                                    + @NL
+                        END +
+                        ''    ( '' +
+                        '
+                        +
+                        -- values
+                        STUFF((
+                            SELECT _
+                              = ' + '', ''' + @NL
+                              + '              + '
+                              + 'ISNULL('
+                              +   IIF(f.quoting > 0, '@QT + ', '')
+                              +     IIF(f.quoting > 1, 'REPLACE(', '')
+                              +       'CONVERT(nvarchar(max), '
+                              +         QUOTENAME(c.name)
+                              +         f.style
+                              +       ')'
+                              +     IIF(f.quoting > 1, ', @QT, @QT+@QT)', '')
+                              +   IIF(f.quoting > 0, ' + @QT', '')
+                              + ', ''NULL'')'
+                            FROM
+                                sys.columns c
+                            INNER JOIN
+                                formats f
+                                ON f.user_type_id = c.system_type_id
+                            WHERE 0=0
+                                AND c.object_id   = o.object_id
+                                AND c.is_computed = 0
+                                AND c.is_identity = 0
+                            ORDER BY
+                                c.column_id
+                            FOR XML
+                                PATH(''), TYPE
+                        )
+                        .value('.', 'nvarchar(max)')
+                        , 1, 7, '')
+                        +
+                        ' + '' )''
+                    FROM
+                        ' + o.quoted_name + '
+                    FOR XML
+                        PATH(''''), TYPE
+                )
+                .value(''.'', ''nvarchar(max)'')
+                , 1, 9, '''')
+                +
+                '';''
+        )
+        INSERT #steps (kind, name, sql)
+        SELECT * FROM step
+        WHERE sql IS NOT NULL;
     '
     FROM
         #objects o
@@ -1155,14 +1158,8 @@ SELECT @Sql =
     FOR XML
         PATH(''), TYPE
 )
-.value('.', 'nvarchar(max)')
-+
-'
-    )
-    INSERT #steps (kind, name, sql)
-    SELECT * FROM step
-    WHERE sql IS NOT NULL;
-';
+.value('.', 'nvarchar(max)');
+
 EXEC(@Sql);
 
 -- -----------------------------------------------------------------------------
