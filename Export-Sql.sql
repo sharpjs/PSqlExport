@@ -1534,29 +1534,28 @@ SELECT
             ' ON ' + x.qname + ' TO ' + QUOTENAME(u.name) + ';' + @NL
             COLLATE Latin1_General_100_CI_AS_SC
         FROM
-            @schemas s
-        CROSS APPLY
             (
                 -- Objects
                 SELECT
-                    class    = 1, -- object or column
-                    major_id = o.object_id,
-                    name     = o.name,
-                    qname    = QUOTENAME(s.name) + '.' + QUOTENAME(o.name)
-                FROM sys.objects o
-                WHERE 0=0
-                    AND o.schema_id     = s.schema_id
-                    AND o.is_ms_shipped = 0
-                UNION ALL
+                    class       = 1, -- object or column
+                    major_id    = o.object_id,
+                    schema_name = o.schema_name,
+                    name        = o.object_name,
+                    qname       = o.quoted_name
+                FROM #objects o
+              UNION ALL
                 -- User-defined types
                 SELECT
-                    class    = 6, -- type
-                    major_id = t.user_type_id,
-                    name     = t.name,
-                    qname    = 'TYPE::' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name)
-                FROM sys.types t
-                WHERE 0=0
-                    AND t.schema_id        = s.schema_id
+                    class       = 6, -- type
+                    major_id    = t.user_type_id,
+                    schema_name = s.name,
+                    name        = t.name,
+                    qname       = 'TYPE::' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name)
+                FROM
+                    @schemas s
+                INNER JOIN
+                    sys.types t
+                    ON  t.schema_id        = s.schema_id
                     AND t.is_user_defined  = 1
                     AND t.is_assembly_type = 0
             ) x
@@ -1574,7 +1573,7 @@ SELECT
             sys.database_principals u
             ON u.principal_id = g.grantee_principal_id
         ORDER BY
-           x.class, s.name, x.name, g.state, u.name
+           x.class, x.schema_name, x.name, g.state, u.name
         FOR XML
             PATH(''), TYPE
     )
