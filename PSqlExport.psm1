@@ -6,9 +6,9 @@
     SPDX-License-Identifier: ISC
 #>
 
-#Requires -Version 5
+#Requires -Version 7
 $ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 3
 
 # Dependencies
 if (-not (Get-Module PSql)) {
