@@ -1624,77 +1624,79 @@ WHERE
 -- -----------------------------------------------------------------------------
 -- Permissions
 
+WITH targets AS
+(
+    -- Objects
+    SELECT
+        class       = 1, -- object or column
+        major_id    = o.object_id,
+        schema_name = o.schema_name,
+        target_name = o.object_name,
+        quoted_name = o.quoted_name
+    FROM
+        #objects o
+UNION ALL
+    -- User-defined types
+    SELECT
+        class       = 6, -- type
+        major_id    = t.user_type_id,
+        schema_name = s.name,
+        target_name = t.name,
+        quoted_name = CONCAT('TYPE::', QUOTENAME(s.name), '.', QUOTENAME(t.name))
+    FROM
+        @schemas s
+    INNER JOIN
+        sys.types t
+        ON  t.schema_id        = s.schema_id
+        AND t.is_user_defined  = 1
+        AND t.is_assembly_type = 0
+)
+, permissions AS
+(
+    SELECT
+        x.schema_name,
+        x.target_name,
+        sql = CONCAT(
+            p.state_desc, -- GRANT
+            ' ',    p.permissions,
+            ' ON ', x.quoted_name,
+            ' TO ', QUOTENAME(u.name),
+            ';',    @NL
+        )
+        COLLATE Latin1_General_100_CI_AS_SC
+    FROM
+        targets x
+    CROSS APPLY
+        (
+            -- Principals (users, roles, etc.)
+            SELECT
+                p.state_desc,
+                p.grantee_principal_id,
+                permissions =
+                    STRING_AGG(p.permission_name, ', ')
+                    WITHIN GROUP (ORDER BY p.permission_name)
+            FROM
+                sys.database_permissions p
+            WHERE 0=0
+                AND p.class    = x.class
+                AND p.major_id = x.major_id
+                AND p.minor_id = 0
+            GROUP BY
+                p.state_desc, p.grantee_principal_id
+        ) p
+    INNER JOIN
+        sys.database_principals u
+        ON u.principal_id = p.grantee_principal_id
+)
 INSERT #steps (kind, name, sql)
 SELECT
     'perm', '(all)',
-    sql =
-    (
-        SELECT
-            g.state_desc + ' ' +
-            STUFF(
-            (
-                -- Permissions
-                SELECT ', ' + p.permission_name
-                FROM sys.database_permissions p
-                WHERE 0=0
-                    AND p.class                = x.class
-                    AND p.major_id             = x.major_id
-                    AND p.minor_id             = 0
-                    AND p.state                = g.state
-                    AND p.grantee_principal_id = g.grantee_principal_id
-                ORDER BY
-                    p.permission_name
-                FOR XML
-                    PATH(''), TYPE
-            )
-            .value('.', 'nvarchar(max)'), 1, 2, '') +
-            ' ON ' + x.qname + ' TO ' + QUOTENAME(u.name) + ';' + @NL
-            COLLATE Latin1_General_100_CI_AS_SC
-        FROM
-            (
-                -- Objects
-                SELECT
-                    class       = 1, -- object or column
-                    major_id    = o.object_id,
-                    schema_name = o.schema_name,
-                    name        = o.object_name,
-                    qname       = o.quoted_name
-                FROM #objects o
-              UNION ALL
-                -- User-defined types
-                SELECT
-                    class       = 6, -- type
-                    major_id    = t.user_type_id,
-                    schema_name = s.name,
-                    name        = t.name,
-                    qname       = 'TYPE::' + QUOTENAME(s.name) + '.' + QUOTENAME(t.name)
-                FROM
-                    @schemas s
-                INNER JOIN
-                    sys.types t
-                    ON  t.schema_id        = s.schema_id
-                    AND t.is_user_defined  = 1
-                    AND t.is_assembly_type = 0
-            ) x
-        CROSS APPLY
-            (
-                -- Principals (users, roles, etc.)
-                SELECT DISTINCT g.state, g.state_desc, g.grantee_principal_id
-                FROM sys.database_permissions g
-                WHERE 0=0
-                    AND g.class    = x.class
-                    AND g.major_id = x.major_id
-                    AND g.minor_id = 0
-            ) g
-        INNER JOIN
-            sys.database_principals u
-            ON u.principal_id = g.grantee_principal_id
-        ORDER BY
-           x.class, x.schema_name, x.name, g.state, u.name
-        FOR XML
-            PATH(''), TYPE
+    sql = ISNULL(
+        STRING_AGG(sql, '') WITHIN GROUP (ORDER BY schema_name, target_name),
+        CONCAT('-- No permissions', @NL)
     )
-    .value('.', 'nvarchar(max)')
+FROM
+    permissions
 ;
 
 -- -----------------------------------------------------------------------------
