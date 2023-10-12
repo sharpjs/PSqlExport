@@ -2,19 +2,8 @@
     Database-to-SQL Export Script
     https://github.com/sharpjs/PSql.Export
 
-    Copyright (C) 2017 Jeffrey Sharp
-
-    Permission to use, copy, modify, and distribute this software for any
-    purpose with or without fee is hereby granted, provided that the above
-    copyright notice and this permission notice appear in all copies.
-
-    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-    MERCHANTABILITY AND FITNESS.  IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-    ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+    Copyright 2023 Subatomix Research Inc.
+    SPDX-License-Identifier: ISC
 
     PHASES
     ======
@@ -43,23 +32,29 @@ SET NOCOUNT ON;
 
 DECLARE
     -- General Constants
-    @NL         nchar(2) = CHAR(13) + CHAR(10),
+    @NL         nchar(2) = NCHAR(13) + NCHAR(10),
     @Edition    int      = CONVERT(int, SERVERPROPERTY('EngineEdition')),
     -- Database Properties
     @Collation  sysname  ,
     @Version    int      ,
     -- Edition Contants
-    @Standard   int      = 2, -- Standard, Web, Business Intelligence
-    @Enterprise int      = 3, -- Evaluation, Developer, Enterprise
-    @Express    int      = 4, -- Express
-    @AzureSqlDb int      = 5, -- Azure SQL Database
-    @AzureSqlDw int      = 6, -- Azure SQL Data Warehouse
+    -- https://docs.microsoft.com/en-us/sql/t-sql/functions/serverproperty-transact-sql
+    @Standard   int      =  2, -- Standard, Web, Business Intelligence
+    @Enterprise int      =  3, -- Evaluation, Developer, Enterprise
+    @Express    int      =  4, -- Express
+    @AzureSqlDb int      =  5, -- Azure SQL Database
+    @AzureSynAn int      =  6, -- Azure Synapse Analytics (fka Data Warehouse)
+    @AzureSqlMi int      =  8, -- Azure SQL Managed Instance
+    @AzureSqlEd int      =  9, -- Azure SQL Edge
+    @AzureSynSl int      = 11, -- Azure Synapse serverless SQL pool
     -- Version Constants
     @Sql2008    int      = 100, -- SQL Server 2008 and 2008 R2
     @Sql2012    int      = 110, -- SQL Server 2012
     @Sql2014    int      = 120, -- SQL Server 2014
     @Sql2016    int      = 130, -- SQL Server 2016
-    @Sql2017    int      = 140  -- SQL Server 2017 & Azure SQL
+    @Sql2017    int      = 140, -- SQL Server 2017
+    @Sql2019    int      = 150, -- SQL Server 2019
+    @Sql2022    int      = 160  -- SQL Server 2022 & Azure SQL
 ;
 
 SELECT
@@ -79,8 +74,8 @@ IF OBJECT_ID('tempdb..#excluded_objects') IS NULL
     CREATE TABLE #excluded_objects
         (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
 
-IF OBJECT_ID('tempdb..#populated_tables') IS NULL
-    CREATE TABLE #populated_tables
+IF OBJECT_ID('tempdb..#excluded_data') IS NULL
+    CREATE TABLE #excluded_data
         (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
 
 IF OBJECT_ID('tempdb..#steps') IS NOT NULL
@@ -120,12 +115,12 @@ CREATE UNIQUE INDEX ux_1
 
 INSERT #schemas
 SELECT
-    schema_id, name
+    s.schema_id, s.name
 FROM
-    sys.schemas
+    sys.schemas s
 WHERE 0=0
-    AND name NOT IN ('sys', 'INFORMATION_SCHEMA')
-    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas x WHERE name LIKE x.pattern)
+    AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
+    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas x WHERE s.name LIKE x.pattern)
 ;
 
 -- -----------------------------------------------------------------------------
@@ -144,12 +139,12 @@ DECLARE @schemas TABLE
 
 INSERT @schemas
 SELECT
-    schema_id, name
+    s.schema_id, s.name
 FROM
-    sys.schemas
+    sys.schemas s
 WHERE 0=0
-    AND name NOT IN ('sys', 'INFORMATION_SCHEMA')
-    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas WHERE name LIKE pattern)
+    AND s.name NOT IN ('sys', 'INFORMATION_SCHEMA')
+    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas x WHERE s.name LIKE x.pattern)
 ;
 
 -- -----------------------------------------------------------------------------
@@ -231,7 +226,7 @@ WHERE 0=0
     AND        o.is_ms_shipped    = 0
     AND ISNULL(t.is_external,  0) = 0
     AND ISNULL(t.is_filetable, 0) = 0
-    AND NOT EXISTS (SELECT 0 FROM #excluded_objects x WHERE o.name LIKE x.pattern)
+    AND NOT EXISTS (SELECT 0 FROM #excluded_objects x WHERE s.name + '.' + o.name LIKE x.pattern)
 ;
 
 -- -----------------------------------------------------------------------------
@@ -365,18 +360,23 @@ SELECT
     ''                                                                                                     + @NL +
     'ALTER DATABASE CURRENT SET'                                                                           + @NL +
     '    READ_COMMITTED_SNAPSHOT      ' + IIF(is_read_committed_snapshot_on = 1, 'ON',     'OFF'   ) + ';' + @NL +
-    IIF(@Edition NOT IN (@AzureSqlDb, @AzureSqlDw),
+    IIF(@Edition IN (@Express, @Standard, @Enterprise, @AzureSqlMi),
     ''                                                                                                     + @NL +
-    'ALTER DATABASE CURRENT SET'                                                                           + @NL +
-    '    RECOVERY                     ' + CASE recovery_model
+    'IF CONVERT(int, SERVERPROPERTY(''EngineEdition'')) IN (' +
+        CONCAT(@Express, ', ', @Standard, ', ', @Enterprise, ', ', @AzureSqlMi) +
+    ')'                                                                                                    + @NL +
+    'EXEC('''                                                                                              + @NL +
+    '    ALTER DATABASE CURRENT SET'                                                                       + @NL +
+    '        RECOVERY                 ' + CASE recovery_model
                                             WHEN 1 THEN 'FULL'
                                             WHEN 2 THEN 'BULK_LOGGED'
                                                    ELSE 'SIMPLE'
                                           END                                                        + ',' + @NL +
-    '    CONTAINMENT =                ' + CASE recovery_model
+    '        CONTAINMENT =            ' + CASE containment
                                             WHEN 0 THEN 'NONE'
                                                    ELSE 'PARTIAL'
-                                          END                                                        + ';' + @NL ,
+                                          END                                                        + ';' + @NL +
+    ''');'                                                                                                 + @NL ,
     ''
     ) +
     ''
@@ -450,15 +450,15 @@ ORDER BY
 
 INSERT #steps (kind, name, sql)
 SELECT
-    'schema', name,
-    'CREATE SCHEMA ' + QUOTENAME(name) + ' AUTHORIZATION dbo;' + @NL
+    'schema', s.name,
+    'CREATE SCHEMA ' + QUOTENAME(s.name) + ' AUTHORIZATION dbo;' + @NL
 FROM
-    sys.schemas
+    sys.schemas s
 WHERE 0=0
     -- Exclude built-in schemas
-    AND name NOT IN ('dbo', 'guest', 'sys', 'INFORMATION_SCHEMA')
-    AND name NOT LIKE 'db[_]%'
-    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas WHERE name LIKE pattern)
+    AND s.name NOT IN ('dbo', 'guest', 'sys', 'INFORMATION_SCHEMA')
+    AND s.name NOT LIKE 'db[_]%'
+    AND NOT EXISTS (SELECT 0 FROM #excluded_schemas x WHERE s.name LIKE x.pattern)
 ORDER BY
     name
 ;
@@ -770,7 +770,7 @@ WITH chunks AS
                 THEN 1 -- will accept this record
                 ELSE 0 -- will ignore this record
             END,
-        column_id_min = 
+        column_id_min =
             CASE
                 WHEN this.used_column_id_max > prev.column_id_max
                 THEN prev.column_id_max + 1     -- compute new value
@@ -1007,7 +1007,7 @@ ORDER BY
 ;
 
 -- -----------------------------------------------------------------------------
--- Data
+-- Table Data
 
 DECLARE @Sql nvarchar(max);
 
@@ -1046,6 +1046,15 @@ WITH formats AS
         AND t.is_table_type = 0
         AND t.name         != 'timestamp'
 )
+, tables_with_identity AS
+(
+    SELECT DISTINCT
+        object_id
+    FROM
+        sys.columns
+    WHERE
+        is_identity = 1
+)
 SELECT @Sql =
 '
     DECLARE
@@ -1060,85 +1069,136 @@ SELECT @Sql =
             SELECT
                 kind = ''data'',
                 name = ''' + REPLACE(o.display_name, '''', '''''') + ''',
-                sql  = STUFF((
-                    SELECT _ =
-                        CASE ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) % 1000 -- max insert count
-                            WHEN 1 THEN
-                                '';''                                                    + @NL +
-                                ''GO''                                                   + @NL +
-                                ''''                                                     + @NL +
-                                ''INSERT ' + REPLACE(o.quoted_name, '''', '''''') + '''  + @NL +
-                                ''    ( '                                                +
-                                -- column names
-                                    STUFF((
-                                        SELECT
-                                            ', ' + REPLACE(QUOTENAME(c.name), '''', '''''')
-                                        FROM
-                                            sys.columns c
-                                        INNER JOIN
-                                            formats f
-                                            ON f.user_type_id = c.system_type_id
-                                        WHERE 0=0
-                                            AND c.object_id   = o.object_id
-                                            AND c.is_computed = 0
-                                            AND c.is_identity = 0
-                                        ORDER BY
-                                            c.column_id
-                                        FOR XML
-                                            PATH(''), TYPE
-                                    )
-                                    .value('.', 'nvarchar(max)')
-                                    , 1, 2, '')                                          +
-                                ' )''                                                    + @NL +
-                                ''VALUES''                                               + @NL
+                sql  =
+                (
+                    SELECT _
+                    =
+                        -- batch separator
+                        CASE WHEN [<Export-Sql>$N] % 1000 = 1 AND [<Export-Sql>$N] > 1 THEN
+                            -- at start of subsequent batch
+                            ''GO'' + @NL +
+                            ''''   + @NL
+                        ELSE
+                            ''''
+                        END
+                    '+
+                        -- identity insert enable
+                        CASE WHEN i.object_id IS NOT NULL THEN
+                    '+
+                            -- identity insert enable
+                            CASE WHEN [<Export-Sql>$N] % 1000 = 1 THEN
+                                -- at start of batch
+                                ''SET IDENTITY_INSERT ' + REPLACE(o.quoted_name, '''', '''''') + ' ON;'' + @NL +
+                                ''''                                                                     + @NL
                             ELSE
-                                '',''                                                    + @NL
-                        END +
+                                ''''
+                            END
+                    '
+                        ELSE
+                            ''
+                        END
+                    +'+
+                        -- insert statement header or value tuple separator
+                        CASE WHEN [<Export-Sql>$N] % 1000 = 1 THEN
+                            -- at start of batch
+                            ''INSERT ' + REPLACE(o.quoted_name, '''', '''''') + '''  + @NL +
+                            ''    ( '                                                +
+                                -- column names
+                                STUFF((
+                                    SELECT
+                                        ', ' + REPLACE(QUOTENAME(c.name), '''', '''''')
+                                    FROM
+                                        sys.columns c
+                                    INNER JOIN
+                                        formats f
+                                        ON f.user_type_id = c.system_type_id
+                                    WHERE 0=0
+                                        AND c.object_id   = o.object_id
+                                        AND c.is_computed = 0
+                                    ORDER BY
+                                        c.column_id
+                                    FOR XML
+                                        PATH(''), TYPE
+                                )
+                                .value('.', 'nvarchar(max)')
+                                , 1, 2, '')                                          +
+                            ' )''                                                    + @NL +
+                            ''VALUES''                                               + @NL
+                        ELSE
+                            '',''                                                    + @NL
+                        END
+                    +
+                        -- value tuple
                         ''    ( '' +
                         '
                         +
-                        -- values
-                        STUFF((
-                            SELECT _
-                              = ' + '', ''' + @NL
-                              + '              + '
-                              + 'ISNULL('
-                              +   IIF(f.quoting > 0, '@QT + ', '')
-                              +     IIF(f.quoting > 1, 'REPLACE(', '')
-                              +       'CONVERT(nvarchar(max), '
-                              +         QUOTENAME(c.name)
-                              +         f.style
-                              +       ')'
-                              +     IIF(f.quoting > 1, ', @QT, @QT+@QT)', '')
-                              +   IIF(f.quoting > 0, ' + @QT', '')
-                              + ', ''NULL'')'
-                            FROM
-                                sys.columns c
-                            INNER JOIN
-                                formats f
-                                ON f.user_type_id = c.system_type_id
-                            WHERE 0=0
-                                AND c.object_id   = o.object_id
-                                AND c.is_computed = 0
-                                AND c.is_identity = 0
-                            ORDER BY
-                                c.column_id
-                            FOR XML
-                                PATH(''), TYPE
-                        )
-                        .value('.', 'nvarchar(max)')
-                        , 1, 7, '')
+                            -- values
+                            STUFF((
+                                SELECT _
+                                  = ' + '', ''' + @NL
+                                  + '              + '
+                                  + 'ISNULL('
+                                  +   IIF(f.quoting > 0, '@QT + ', '')
+                                  +     IIF(f.quoting > 1, 'REPLACE(', '')
+                                  +       'CONVERT(nvarchar(max), '
+                                  +         QUOTENAME(c.name)
+                                  +         f.style
+                                  +       ')'
+                                  +     IIF(f.quoting > 1, ', @QT, @QT+@QT)', '')
+                                  +   IIF(f.quoting > 0, ' + @QT', '')
+                                  + ', ''NULL'')'
+                                FROM
+                                    sys.columns c
+                                INNER JOIN
+                                    formats f
+                                    ON f.user_type_id = c.system_type_id
+                                WHERE 0=0
+                                    AND c.object_id   = o.object_id
+                                    AND c.is_computed = 0
+                                ORDER BY
+                                    c.column_id
+                                FOR XML
+                                    PATH(''), TYPE
+                            )
+                            .value('.', 'nvarchar(max)')
+                            , 1, 7, '')
                         +
                         ' + '' )''
+                    +
+                        -- statement terminator
+                        CASE WHEN [<Export-Sql>$N] % 1000 = 0 OR [<Export-Sql>$N] = [<Export-Sql>$C] THEN
+                            '';'' + @NL
+                        ELSE
+                            ''''
+                        END
+                    '+
+                        -- identity insert disable
+                        CASE WHEN i.object_id IS NOT NULL THEN
+                    '+
+                            -- identity insert disable
+                            CASE WHEN [<Export-Sql>$N] % 1000 = 0 OR [<Export-Sql>$N] = [<Export-Sql>$C] THEN
+                                -- at end of batch
+                                ''''                                                                      + @NL +
+                                ''SET IDENTITY_INSERT ' + REPLACE(o.quoted_name, '''', '''''') + ' OFF;'' + @NL
+                            ELSE
+                                ''''
+                            END
+                    '
+                        ELSE
+                            ''
+                        END
+                    +'
                     FROM
-                        ' + o.quoted_name + '
+                        (
+                            SELECT *,
+                                [<Export-Sql>$N] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+                                [<Export-Sql>$C] = COUNT(*)     OVER ()
+                            FROM ' + o.quoted_name + '
+                        ) _
                     FOR XML
                         PATH(''''), TYPE
                 )
                 .value(''.'', ''nvarchar(max)'')
-                , 1, 9, '''')
-                +
-                '';''
         )
         INSERT #steps (kind, name, sql)
         SELECT * FROM step
@@ -1146,11 +1206,19 @@ SELECT @Sql =
     '
     FROM
         #objects o
+    INNER JOIN
+        sys.dm_db_partition_stats s
+        ON  s.object_id = o.object_id
+        AND s.index_id IN (0, 1) -- heap or clustered
+    LEFT JOIN
+        tables_with_identity i
+        ON i.object_id = o.object_id
     WHERE 0=0
         AND o.type = 'U' -- table
-        AND EXISTS (
-            SELECT NULL FROM #populated_tables p
-            WHERE o.display_name LIKE p.pattern
+        AND s.row_count > 0 -- not empty
+        AND NOT EXISTS (
+            SELECT NULL FROM #excluded_data x
+            WHERE o.display_name LIKE x.pattern
         )
     ORDER BY
         o.schema_name,
@@ -1241,9 +1309,9 @@ SELECT
   + @NL
   + ISNULL('    WHERE ' + i.filter_definition + @NL, '')
   + '    WITH ('
-  +     'PAD_INDEX = ' + IIF(i.is_padded = 1, 'ON', 'OFF')
-  +     IIF(i.is_padded = 1, ', FILLFACTOR = ' + CONVERT(nvarchar, i.fill_factor), '')
-  +     ', DATA_COMPRESSION = ' + ISNULL(p.data_compression_desc, 'NONE')
+  +     'DATA_COMPRESSION = ' + ISNULL(p.data_compression_desc, 'NONE')
+  +     IIF(i.fill_factor BETWEEN 1 AND 99, ', FILLFACTOR = ' + CONVERT(nvarchar, i.fill_factor), '')
+  +     IIF(i.is_padded = 1,                ', PAD_INDEX = ON', '')
   + ');' + @NL
 FROM
     @schemas s
@@ -1286,7 +1354,7 @@ SELECT
             FOR XML PATH(''), TYPE
         ).value('.', 'nvarchar(max)'), 1, 2, '') +
     ')' + @NL +
-    '    REFERENCES ' + QUOTENAME(rs.name) + '.' + QUOTENAME(rt.name) + ' (' + 
+    '    REFERENCES ' + QUOTENAME(rs.name) + '.' + QUOTENAME(rt.name) + ' (' +
         -- Concatenate the referenced columns
         STUFF((
             SELECT ', ' + COL_NAME(kc.referenced_object_id, kc.referenced_column_id)
@@ -1318,7 +1386,7 @@ INNER JOIN
     sys.foreign_keys k
     ON k.parent_object_id = t.object_id
 INNER JOIN
-    sys.tables rt 
+    sys.tables rt
     ON rt.object_id = k.referenced_object_id
 INNER JOIN
     @schemas rs
@@ -1413,9 +1481,27 @@ WHERE 0=0
     AND r.is_ms_shipped = 0
     AND r.type          = 'TR' -- exclude CLR triggers
     AND NOT EXISTS (SELECT 0 FROM #excluded_objects WHERE r.name LIKE pattern)
-ORDER BY
-    s.name, t.name, r.name
+
+UNION ALL
+
+SELECT
+    'trig', s.name + '.' + r.name, OBJECT_DEFINITION(r.object_id)
+FROM
+    @schemas s
+INNER JOIN
+    sys.views v
+    ON v.schema_id = s.schema_id
+INNER JOIN
+    sys.triggers r
+    ON  r.parent_class = 1 -- object
+    AND r.parent_id    = v.object_id
+WHERE 0=0
+    AND v.is_ms_shipped = 0
+    AND r.is_ms_shipped = 0
+    AND r.type          = 'TR' -- exclude CLR triggers
+    AND NOT EXISTS (SELECT 0 FROM #excluded_objects WHERE r.name LIKE pattern)
 ;
+
 
 -- -----------------------------------------------------------------------------
 -- Extended Properties
@@ -1434,21 +1520,37 @@ WITH properties AS
         level1type = CASE class
             WHEN 1 THEN
                 CASE o.type
-                    WHEN 'U' THEN 'TABLE'
+                    WHEN 'U'  THEN 'TABLE'
+                    WHEN 'TR' THEN 'TABLE'
                     ELSE NULL
                 END
             ELSE NULL
         END,
         level1name = CASE class
-            WHEN 1 THEN OBJECT_NAME(major_id)
+            WHEN 1 THEN
+                CASE o.type
+                    WHEN 'U'  THEN OBJECT_NAME(major_id)
+                    WHEN 'TR' THEN OBJECT_NAME(parent_object_id)
+                    ELSE NULL
+                END
             ELSE NULL
         END,
         level2type = CASE class
-            WHEN 1 THEN IIF(minor_id > 0, 'COLUMN', NULL)
+            WHEN 1 THEN
+                CASE o.type
+                    WHEN 'U'  THEN IIF(minor_id > 0, 'COLUMN', NULL)
+                    WHEN 'TR' THEN 'TRIGGER'
+                    ELSE NULL
+                END
             ELSE NULL
         END,
         level2name = CASE class
-            WHEN 1 THEN COL_NAME(major_id, minor_id)
+            WHEN 1 THEN
+                CASE o.type
+                    WHEN 'U'  THEN COL_NAME(major_id, minor_id)
+                    WHEN 'TR' THEN OBJECT_NAME(major_id)
+                    ELSE NULL
+                END
             ELSE NULL
         END
     FROM
@@ -1457,6 +1559,9 @@ WITH properties AS
         sys.objects o
         ON  o.object_id = p.major_id
         AND p.class     = 1 -- object or column
+    INNER JOIN
+        #objects objs
+        ON o.object_id = objs.object_id
 )
 , properties_as_string AS
 (
@@ -1525,7 +1630,7 @@ SELECT
     sql =
     (
         SELECT
-            g.state_desc + ' ' + 
+            g.state_desc + ' ' +
             STUFF(
             (
                 -- Permissions
@@ -1598,7 +1703,7 @@ SELECT
 SELECT
     kind, name, sql
     = '-- ----------------------------------------------------------------------------' + @NL
-    + 'PRINT ''+ ' + kind + ': ' + name + ''''                                          + @NL
+    + 'PRINT ''+ ' + kind + ' ' + name + ''''                                           + @NL
     + 'GO'                                                                              + @NL
     + ''                                                                                + @NL
     + sql                                                  + IIF(RIGHT(sql, 2) = @NL, '', @NL)

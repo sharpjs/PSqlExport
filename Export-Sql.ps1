@@ -2,19 +2,8 @@
     Part of PSqlExport - Database-to-SQL Export Tool for PowerShell
     https://github.com/sharpjs/PSql.Export
 
-    Copyright (C) 2017 Jeffrey Sharp
-
-    Permission to use, copy, modify, and distribute this software for any
-    purpose with or without fee is hereby granted, provided that the above
-    copyright notice and this permission notice appear in all copies.
-
-    THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-    WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-    MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-    ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-    ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+    Copyright 2023 Subatomix Research Inc.
+    SPDX-License-Identifier: ISC
 #>
 
 function Export-Sql {
@@ -38,8 +27,8 @@ function Export-Sql {
         # Exclude objects where the name matches any of the given LIKE patterns.
         [string[]] $ExcludeObjects,
 
-        # Include data in tables where the name matches any of the given LIKE patterns.
-        [string[]] $IncludeData
+        # Exclude data in tables where the name matches any of the given LIKE patterns.
+        [string[]] $ExcludeData
     )
 
     $Connection = $null
@@ -59,8 +48,8 @@ function Export-Sql {
             IF OBJECT_ID('tempdb..#excluded_objects') IS NOT NULL
                 DROP TABLE #excluded_objects;
 
-            IF OBJECT_ID('tempdb..#populated_tables') IS NOT NULL
-                DROP TABLE #populated_tables;
+            IF OBJECT_ID('tempdb..#excluded_data') IS NOT NULL
+                DROP TABLE #excluded_data;
 
             CREATE TABLE #excluded_schemas
                 (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
@@ -68,32 +57,32 @@ function Export-Sql {
             CREATE TABLE #excluded_objects
                 (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
 
-            CREATE TABLE #populated_tables
+            CREATE TABLE #excluded_data
                 (pattern sysname COLLATE CATALOG_DEFAULT NOT NULL PRIMARY KEY);
         "
         if ($ExcludeSchemas) {
             Invoke-Sql -Connection $Connection "
                 INSERT #excluded_schemas
-                VALUES $( (($ExcludeSchemas | % { $_.Replace("'", "''") } | % { "('$_')" }) -join ", ") );
+                VALUES $( (($ExcludeSchemas | ForEach-Object { $_.Replace("'", "''") } | ForEach-Object { "('$_')" }) -join ", ") );
             "
         }
         if ($ExcludeObjects) {
             Invoke-Sql -Connection $Connection "
                 INSERT #excluded_objects
-                VALUES $( (($ExcludeObjects | % { $_.Replace("'", "''") } | % { "('$_')" }) -join ", ") );
+                VALUES $( (($ExcludeObjects | ForEach-Object { $_.Replace("'", "''") } | ForEach-Object { "('$_')" }) -join ", ") );
             "
         }
-        if ($IncludeData) {
+        if ($ExcludeData) {
             Invoke-Sql -Connection $Connection "
-                INSERT #populated_tables
-                VALUES $( (($IncludeData | % { $_.Replace("'", "''") } | % { "('$_')" }) -join ", ") );
+                INSERT #excluded_data
+                VALUES $( (($ExcludeData | ForEach-Object { $_.Replace("'", "''") } | ForEach-Object { "('$_')" }) -join ", ") );
             "
         }
 
         # Execute export script
         $SqlPath = Join-Path $PSScriptRoot Export-Sql.sql
         $Sql = Get-Content -LiteralPath $SqlPath -Encoding UTF8 -Raw
-        Invoke-Sql -Connection $Connection -Sql $Sql | % sql
+        Invoke-Sql -Connection $Connection -Sql $Sql | ForEach-Object sql
     }
     finally {
         Disconnect-Sql $Connection
